@@ -8,8 +8,13 @@ import {
   CODEX_HOOK_DISPATCH_COMMAND,
 } from '../hookDispatchCommands';
 import {
+  completeHookHarnessSession,
   ensureHookHarnessSession,
   getHookHarnessSessionId,
+  listHookHarnessSessionBindings,
+  removeHookHarnessSession,
+  saveHookHarnessSession,
+  sweepStaleHookHarnessSessions,
 } from '../hookSessionStore';
 import { VERSION } from '../../../version';
 
@@ -59,5 +64,144 @@ describe('hookSessionStore', () => {
     });
 
     expect(stored).toBe(first);
+  });
+
+  it('touches updatedAt when a binding is reused', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-touch';
+
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const staleTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const [binding] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    await saveHookHarnessSession({ ...binding, updatedAt: staleTimestamp });
+
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const [touched] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    expect(Date.parse(touched.updatedAt)).toBeGreaterThan(Date.parse(staleTimestamp));
+  });
+
+  it('removes bindings and tolerates missing entries', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-remove';
+
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    await removeHookHarnessSession({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    expect(await getHookHarnessSessionId({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    })).toBeUndefined();
+
+    await expect(removeHookHarnessSession({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'never-bound',
+    })).resolves.toBeUndefined();
+  });
+
+  it('completes the bound harness session and removes the binding', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-complete';
+
+    const harnessSessionId = await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const completed = await completeHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    expect(completed).toBe(true);
+
+    const sessionPath = path.join(
+      tempDir, '.context', 'runtime', 'sessions', harnessSessionId, 'session.json'
+    );
+    const session = await fs.readJson(sessionPath);
+    expect(session.status).toBe('completed');
+
+    expect(await getHookHarnessSessionId({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    })).toBeUndefined();
+  });
+
+  it('returns false without a binding and never throws', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+
+    await expect(completeHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'never-bound',
+    })).resolves.toBe(false);
+  });
+
+  it('sweeps stale bindings but keeps fresh and current ones', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+
+    const staleSessionId = await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'stale-host',
+    });
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'fresh-host',
+    });
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'current-host',
+    });
+
+    const staleTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const bindings = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    const staleBinding = bindings.find((binding) => binding.hostSessionId === 'stale-host')!;
+    const currentBinding = bindings.find((binding) => binding.hostSessionId === 'current-host')!;
+    await saveHookHarnessSession({ ...staleBinding, updatedAt: staleTimestamp });
+    await saveHookHarnessSession({ ...currentBinding, updatedAt: staleTimestamp });
+
+    const swept = await sweepStaleHookHarnessSessions(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      currentHostSessionId: 'current-host',
+    });
+
+    expect(swept).toBe(1);
+
+    const remaining = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    const remainingHosts = remaining.map((binding) => binding.hostSessionId).sort();
+    expect(remainingHosts).toEqual(['current-host', 'fresh-host']);
+
+    const staleSessionPath = path.join(
+      tempDir, '.context', 'runtime', 'sessions', staleSessionId, 'session.json'
+    );
+    const staleSession = await fs.readJson(staleSessionPath);
+    expect(staleSession.status).toBe('completed');
   });
 });

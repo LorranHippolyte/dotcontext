@@ -107,6 +107,9 @@ Wired events (v1):
 | `SessionStart` | `*` |
 | `PostToolUse` | `^Write$\|^Edit$\|^Bash$` |
 | `Stop` | `*` |
+| `SessionEnd` | `*` |
+
+On `SessionEnd`, the dispatch completes the harness session bound to the host session and removes its binding, so `.context/runtime/sessions/` entries do not stay open forever. `SessionStart` also sweeps bindings older than 24 hours from host sessions that ended without a `SessionEnd` (crash, closed terminal).
 
 After install, restart Claude Code. On the next session start in a repo with `.context/`, you should see a compact bootstrap message injected into context.
 

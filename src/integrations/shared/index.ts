@@ -52,10 +52,16 @@ export {
 } from './hookDispatchCommands';
 
 export {
+  completeHookHarnessSession,
   ensureHookHarnessSession,
   getHookHarnessSessionId,
+  listHookHarnessSessionBindings,
+  removeHookHarnessSession,
   saveHookHarnessSession,
+  STALE_HOOK_SESSION_MAX_AGE_MS,
+  sweepStaleHookHarnessSessions,
   type HookSessionAdapter,
+  type HookSessionAdapterParams,
   type HookSessionBinding,
   type ShellHookSource,
 } from './hookSessionStore';

@@ -21,17 +21,32 @@ interface HookSessionStoreDocument {
   bindings: Record<string, Record<string, HookSessionBinding>>;
 }
 
+export type HookSessionAdapterParams =
+  | {
+    action: 'createSession';
+    name: string;
+    metadata?: Record<string, unknown>;
+  }
+  | {
+    action: 'completeSession';
+    sessionId: string;
+    note?: string;
+  };
+
 export interface HookSessionAdapter {
   handle(event: {
     tool: 'harness';
-    params: {
-      action: 'createSession';
-      name: string;
-      metadata?: Record<string, unknown>;
-    };
+    params: HookSessionAdapterParams;
     source?: string;
   }): Promise<HarnessHookResponse>;
 }
+
+/**
+ * Bindings older than this are treated as leftovers from host sessions that
+ * ended without a SessionEnd hook (crash, closed terminal) and are completed
+ * during the next SessionStart sweep.
+ */
+export const STALE_HOOK_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function storeKey(source: ShellHookSource, hostSessionId: string): string {
   return `${source}:${hostSessionId}`;
@@ -91,9 +106,12 @@ export async function ensureHookHarnessSession(
     hostSessionId: string;
   }
 ): Promise<string> {
-  const existing = await getHookHarnessSessionId(options);
+  const document = await readStore(options.repoPath);
+  const existing = document.bindings[options.source]?.[options.hostSessionId];
   if (existing) {
-    return existing;
+    existing.updatedAt = new Date().toISOString();
+    await writeStore(options.repoPath, document);
+    return existing.harnessSessionId;
   }
 
   const now = new Date().toISOString();
@@ -130,4 +148,126 @@ export async function ensureHookHarnessSession(
 
 export function hookSessionStoreKey(source: ShellHookSource, hostSessionId: string): string {
   return storeKey(source, hostSessionId);
+}
+
+export async function listHookHarnessSessionBindings(
+  repoPath: string,
+  source: ShellHookSource
+): Promise<HookSessionBinding[]> {
+  const document = await readStore(repoPath);
+  return Object.values(document.bindings[source] ?? {});
+}
+
+export async function removeHookHarnessSession(options: {
+  repoPath: string;
+  source: ShellHookSource;
+  hostSessionId: string;
+}): Promise<void> {
+  const document = await readStore(options.repoPath);
+  const sourceBindings = document.bindings[options.source];
+  if (!sourceBindings || !(options.hostSessionId in sourceBindings)) {
+    return;
+  }
+
+  delete sourceBindings[options.hostSessionId];
+  await writeStore(options.repoPath, document);
+}
+
+/**
+ * Completes the harness session bound to a host session and removes the
+ * binding. Never throws: session hygiene must not break hook dispatch, and
+ * the binding is removed even when completion fails so stale bindings do not
+ * accumulate.
+ */
+export async function completeHookHarnessSession(
+  adapter: HookSessionAdapter,
+  options: {
+    repoPath: string;
+    source: ShellHookSource;
+    hostSessionId: string;
+    note?: string;
+  }
+): Promise<boolean> {
+  let harnessSessionId: string | undefined;
+  try {
+    harnessSessionId = await getHookHarnessSessionId(options);
+  } catch {
+    return false;
+  }
+
+  if (!harnessSessionId) {
+    return false;
+  }
+
+  let completed = false;
+  try {
+    const response = await adapter.handle({
+      tool: 'harness',
+      params: {
+        action: 'completeSession',
+        sessionId: harnessSessionId,
+        note: options.note ?? 'Host session ended',
+      },
+      source: options.source,
+    });
+    completed = response.ok;
+  } catch {
+    completed = false;
+  }
+
+  try {
+    await removeHookHarnessSession(options);
+  } catch {
+    // Binding cleanup must never make hook dispatch blocking.
+  }
+
+  return completed;
+}
+
+/**
+ * Completes and unbinds harness sessions whose bindings have not been touched
+ * within maxAgeMs. Covers host sessions that ended without a SessionEnd hook
+ * (crash, closed terminal), so runtime sessions do not stay open forever.
+ */
+export async function sweepStaleHookHarnessSessions(
+  adapter: HookSessionAdapter,
+  options: {
+    repoPath: string;
+    source: ShellHookSource;
+    currentHostSessionId?: string;
+    maxAgeMs?: number;
+    now?: Date;
+  }
+): Promise<number> {
+  const maxAgeMs = options.maxAgeMs ?? STALE_HOOK_SESSION_MAX_AGE_MS;
+  const cutoff = (options.now ?? new Date()).getTime() - maxAgeMs;
+
+  let bindings: HookSessionBinding[];
+  try {
+    bindings = await listHookHarnessSessionBindings(options.repoPath, options.source);
+  } catch {
+    return 0;
+  }
+
+  let swept = 0;
+  for (const binding of bindings) {
+    if (binding.hostSessionId === options.currentHostSessionId) {
+      continue;
+    }
+
+    const updatedAt = Date.parse(binding.updatedAt);
+    if (Number.isNaN(updatedAt) || updatedAt > cutoff) {
+      continue;
+    }
+
+    await completeHookHarnessSession(adapter, {
+      repoPath: options.repoPath,
+      source: options.source,
+      hostSessionId: binding.hostSessionId,
+      note: 'Stale host session swept at SessionStart',
+    });
+    swept += 1;
+  }
+
+  return swept;
 }

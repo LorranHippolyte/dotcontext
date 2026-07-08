@@ -16,6 +16,7 @@ import type { ClaudeCodeHookInput } from '../../integrations/claude-code/hooks/m
 import { mapCodexResponse } from '../../integrations/codex/hooks/mapCodexResponse';
 import type { CodexHookInput } from '../../integrations/codex/hooks/mapCodexEvent';
 import {
+  completeHookHarnessSession,
   ensureHookHarnessSession,
   extractHarnessSessionId,
   finalizeHostHookOutput,
@@ -25,6 +26,7 @@ import {
   resolveHookRepoRoot,
   resolveHarnessHookFromHostEvent,
   saveHookHarnessSession,
+  sweepStaleHookHarnessSessions,
   type HostHookOutput,
 } from '../../integrations/shared';
 import { formatNavigationExcerpt } from '../../integrations/shared/formatNavigationExcerpt';
@@ -101,6 +103,9 @@ function canonicalizeHookEventName(hookEventName?: string): string | undefined {
     case 'subagentstop':
     case 'subagent_stop':
       return 'SubagentStop';
+    case 'sessionend':
+    case 'session_end':
+      return 'SessionEnd';
     default:
       return hookEventName;
   }
@@ -304,7 +309,10 @@ async function dispatchShellHookEvent(
     throw new Error('Hook dispatch requires hook_event_name');
   }
 
-  if ((hookEventName === 'Stop' || hookEventName === 'SubagentStop') && isSessionEndReentry(envelope)) {
+  if (
+    (hookEventName === 'Stop' || hookEventName === 'SubagentStop' || hookEventName === 'SessionEnd')
+    && isSessionEndReentry(envelope)
+  ) {
     return {
       response: {
         ok: true,
@@ -340,6 +348,16 @@ async function dispatchShellHookEvent(
           source,
           hostSessionId: normalizedEvent.sessionId,
         });
+      }
+
+      try {
+        await sweepStaleHookHarnessSessions(adapter, {
+          repoPath,
+          source,
+          currentHostSessionId: normalizedEvent.sessionId,
+        });
+      } catch {
+        // Session hygiene must never make hook dispatch blocking.
       }
 
       navigationResponse = await adapter.handle({
@@ -452,6 +470,25 @@ async function dispatchShellHookEvent(
 
     return {
       response,
+      output: { continue: true },
+    };
+  }
+
+  if (hookEventName === 'SessionEnd') {
+    let completed = false;
+    if (normalizedEvent.sessionId) {
+      completed = await completeHookHarnessSession(adapter, {
+        repoPath,
+        source,
+        hostSessionId: normalizedEvent.sessionId,
+      });
+    }
+
+    return {
+      response: createHookDispatchSuccessResponse(source, {
+        handled: 'session_end',
+        completed,
+      }),
       output: { continue: true },
     };
   }

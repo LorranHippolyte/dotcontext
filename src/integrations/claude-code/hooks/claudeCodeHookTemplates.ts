@@ -22,7 +22,7 @@ export type ClaudeCodeHookTemplate = ClaudeCodeHookMatcherEntry[];
 
 export function buildClaudeCodeHookTemplates(
   command: string = buildHookDispatchCommand('claude-code')
-): Record<'SessionStart' | 'PostToolUse' | 'Stop', ClaudeCodeHookTemplate> {
+): Record<'SessionStart' | 'PostToolUse' | 'Stop' | 'SessionEnd', ClaudeCodeHookTemplate> {
   return {
     SessionStart: [
       {
@@ -41,6 +41,11 @@ export function buildClaudeCodeHookTemplates(
         hooks: [{ type: 'command', command }],
       },
     ],
+    SessionEnd: [
+      {
+        hooks: [{ type: 'command', command }],
+      },
+    ],
   };
 }
 
@@ -50,7 +55,7 @@ export function buildClaudeCodeHookTemplates(
  * resolve to the local dotcontext binary when it is available.
  */
 export const CLAUDE_CODE_HOOK_TEMPLATES: Record<
-  'SessionStart' | 'PostToolUse' | 'Stop',
+  'SessionStart' | 'PostToolUse' | 'Stop' | 'SessionEnd',
   ClaudeCodeHookTemplate
 > = buildClaudeCodeHookTemplates(CLAUDE_CODE_HOOK_DISPATCH_COMMAND);
 

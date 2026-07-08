@@ -92,6 +92,9 @@ Eventos configurados:
 | `SessionStart` | `*` |
 | `PostToolUse` | `^Write$\|^Edit$\|^Bash$` |
 | `Stop` | `*` |
+| `SessionEnd` | `*` |
+
+No `SessionEnd`, o dispatch conclui a sessão do harness vinculada à sessão do host e remove o binding, para que entradas em `.context/runtime/sessions/` não fiquem abertas para sempre. O `SessionStart` também varre bindings com mais de 24 horas de sessões que terminaram sem `SessionEnd` (crash, terminal fechado).
 
 Depois de instalar, reinicie o Claude Code. Em um projeto com `.context/` inicializado, o próximo `SessionStart` deve injetar um resumo compacto de contexto.
 

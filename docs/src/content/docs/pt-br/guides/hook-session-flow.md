@@ -53,7 +53,8 @@ Use `--global` somente quando quiser escrever a configuração no diretório hom
 | Início da sessão | `SessionStart` | `context check` | Injeta readiness de `.context/`, ou uma dica de inicialização |
 | Início da sessão com contexto pronto | `SessionStart` | `harness createSession` + `context getMap` | Cria uma sessão durável e adiciona navegação compacta |
 | Depois de ferramenta | `PostToolUse` para `Write`, `Edit`, `Bash` | `harness appendTrace` | Registra `tool.use` em `trace.jsonl` |
-| Fim da sessão | `Stop` | `workflow-guide` | Mostra próximos passos PREVC somente se há workflow ativo |
+| Fim da resposta | `Stop` | `workflow-guide` | Mostra próximos passos PREVC somente se há workflow ativo |
+| Fim da sessão | `SessionEnd` | `harness completeSession` + remoção do binding | Conclui a sessão durável do harness e limpa `host-sessions.json` |
 
 No fluxo padrão, hooks são não bloqueantes. Erro de trace, workflow ausente ou chamada reentrante de fim de sessão vira `{"continue": true}` para não quebrar a sessão do agente.
 
