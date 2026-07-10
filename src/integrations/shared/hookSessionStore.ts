@@ -150,6 +150,26 @@ export function hookSessionStoreKey(source: ShellHookSource, hostSessionId: stri
   return storeKey(source, hostSessionId);
 }
 
+/**
+ * Marks a binding as recently active so long-lived host sessions that keep
+ * emitting tool events (but never re-trigger SessionStart) are not treated
+ * as stale by the SessionStart sweep.
+ */
+export async function touchHookHarnessSession(options: {
+  repoPath: string;
+  source: ShellHookSource;
+  hostSessionId: string;
+}): Promise<void> {
+  const document = await readStore(options.repoPath);
+  const binding = document.bindings[options.source]?.[options.hostSessionId];
+  if (!binding) {
+    return;
+  }
+
+  binding.updatedAt = new Date().toISOString();
+  await writeStore(options.repoPath, document);
+}
+
 export async function listHookHarnessSessionBindings(
   repoPath: string,
   source: ShellHookSource
@@ -173,11 +193,16 @@ export async function removeHookHarnessSession(options: {
   await writeStore(options.repoPath, document);
 }
 
+function isMissingHarnessSessionMessage(message: string): boolean {
+  return message.includes('Harness session not found');
+}
+
 /**
  * Completes the harness session bound to a host session and removes the
- * binding. Never throws: session hygiene must not break hook dispatch, and
- * the binding is removed even when completion fails so stale bindings do not
- * accumulate.
+ * binding. Never throws: session hygiene must not break hook dispatch.
+ * The binding is removed only when completion succeeds or the session is
+ * confirmed missing; transient failures keep the binding so the SessionStart
+ * stale sweep can retry completion instead of leaking an active session.
  */
 export async function completeHookHarnessSession(
   adapter: HookSessionAdapter,
@@ -200,6 +225,7 @@ export async function completeHookHarnessSession(
   }
 
   let completed = false;
+  let sessionMissing = false;
   try {
     const response = await adapter.handle({
       tool: 'harness',
@@ -211,14 +237,18 @@ export async function completeHookHarnessSession(
       source: options.source,
     });
     completed = response.ok;
-  } catch {
+    sessionMissing = !response.ok && isMissingHarnessSessionMessage(response.error.message);
+  } catch (error) {
     completed = false;
+    sessionMissing = error instanceof Error && isMissingHarnessSessionMessage(error.message);
   }
 
-  try {
-    await removeHookHarnessSession(options);
-  } catch {
-    // Binding cleanup must never make hook dispatch blocking.
+  if (completed || sessionMissing) {
+    try {
+      await removeHookHarnessSession(options);
+    } catch {
+      // Binding cleanup must never make hook dispatch blocking.
+    }
   }
 
   return completed;

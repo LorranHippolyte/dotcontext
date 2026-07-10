@@ -60,6 +60,7 @@ export {
   saveHookHarnessSession,
   STALE_HOOK_SESSION_MAX_AGE_MS,
   sweepStaleHookHarnessSessions,
+  touchHookHarnessSession,
   type HookSessionAdapter,
   type HookSessionAdapterParams,
   type HookSessionBinding,

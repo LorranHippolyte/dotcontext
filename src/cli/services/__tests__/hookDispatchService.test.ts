@@ -871,4 +871,53 @@ describe('HookDispatchService session lifecycle', () => {
     ));
     expect(staleSession.status).toBe('completed');
   });
+
+  it('touches the binding on PostToolUse so active sessions are not swept as stale', async () => {
+    await createReadyContext();
+    const sessionId = 'host-session-long-lived';
+
+    const startStdin = PassThrough.from([
+      JSON.stringify({
+        session_id: sessionId,
+        cwd: tempDir,
+        hook_event_name: 'SessionStart',
+      }),
+    ]);
+    const startStdout = new PassThrough();
+    startStdout.on('data', () => {});
+    await runHookDispatch({
+      source: 'claude-code',
+      repoPath: tempDir,
+      stdin: startStdin,
+      stdout: startStdout,
+    });
+
+    const staleTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const [binding] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    await saveHookHarnessSession({ ...binding, updatedAt: staleTimestamp });
+
+    const postStdin = PassThrough.from([
+      JSON.stringify({
+        session_id: sessionId,
+        cwd: tempDir,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: 'README.md' },
+      }),
+    ]);
+    const postStdout = new PassThrough();
+    postStdout.on('data', () => {});
+
+    const postResult = await runHookDispatch({
+      source: 'claude-code',
+      repoPath: tempDir,
+      stdin: postStdin,
+      stdout: postStdout,
+    });
+
+    expect(postResult.exitCode).toBe(0);
+
+    const [touched] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    expect(Date.parse(touched.updatedAt)).toBeGreaterThan(Date.parse(staleTimestamp));
+  });
 });

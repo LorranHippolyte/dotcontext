@@ -15,6 +15,8 @@ import {
   removeHookHarnessSession,
   saveHookHarnessSession,
   sweepStaleHookHarnessSessions,
+  touchHookHarnessSession,
+  type HookSessionAdapter,
 } from '../hookSessionStore';
 import { VERSION } from '../../../version';
 
@@ -143,6 +145,107 @@ describe('hookSessionStore', () => {
     const session = await fs.readJson(sessionPath);
     expect(session.status).toBe('completed');
 
+    expect(await getHookHarnessSessionId({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    })).toBeUndefined();
+  });
+
+  it('touches updatedAt for an existing binding and no-ops without one', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-tool-touch';
+
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const staleTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const [binding] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    await saveHookHarnessSession({ ...binding, updatedAt: staleTimestamp });
+
+    await touchHookHarnessSession({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const [touched] = await listHookHarnessSessionBindings(tempDir, 'claude-code');
+    expect(Date.parse(touched.updatedAt)).toBeGreaterThan(Date.parse(staleTimestamp));
+
+    await expect(touchHookHarnessSession({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId: 'never-bound',
+    })).resolves.toBeUndefined();
+  });
+
+  it('keeps the binding when completion fails transiently so the sweep can retry', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-transient';
+
+    await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    const failingAdapter: HookSessionAdapter = {
+      handle: async () => ({
+        ok: false,
+        source: 'claude-code',
+        error: { message: 'EBUSY: resource busy or locked' },
+      }),
+    };
+
+    const completed = await completeHookHarnessSession(failingAdapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    expect(completed).toBe(false);
+    expect(await getHookHarnessSessionId({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    })).toBeDefined();
+
+    const retried = await completeHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    expect(retried).toBe(true);
+    expect(await getHookHarnessSessionId({
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    })).toBeUndefined();
+  });
+
+  it('removes the binding when the harness session is confirmed missing', async () => {
+    const adapter = createHarnessHookAdapter({ repoPath: tempDir, source: 'claude-code' });
+    const hostSessionId = 'claude-host-missing';
+
+    const harnessSessionId = await ensureHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    await fs.remove(path.join(tempDir, '.context', 'runtime', 'sessions', harnessSessionId));
+
+    const completed = await completeHookHarnessSession(adapter, {
+      repoPath: tempDir,
+      source: 'claude-code',
+      hostSessionId,
+    });
+
+    expect(completed).toBe(false);
     expect(await getHookHarnessSessionId({
       repoPath: tempDir,
       source: 'claude-code',

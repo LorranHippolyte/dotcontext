@@ -27,6 +27,7 @@ import {
   resolveHarnessHookFromHostEvent,
   saveHookHarnessSession,
   sweepStaleHookHarnessSessions,
+  touchHookHarnessSession,
   type HostHookOutput,
 } from '../../integrations/shared';
 import { formatNavigationExcerpt } from '../../integrations/shared/formatNavigationExcerpt';
@@ -394,6 +395,20 @@ async function dispatchShellHookEvent(
         hostSessionId: normalizedEvent.sessionId,
       })
       : undefined;
+
+    if (harnessSessionId && normalizedEvent.sessionId) {
+      try {
+        // Keep the binding fresh so long-lived sessions that only emit tool
+        // events are not completed by the SessionStart stale sweep.
+        await touchHookHarnessSession({
+          repoPath,
+          source,
+          hostSessionId: normalizedEvent.sessionId,
+        });
+      } catch {
+        // Session hygiene must never make hook dispatch blocking.
+      }
+    }
 
     const mapped = resolveHarnessHookFromHostEvent(normalizedEvent, {
       repoPath,
