@@ -71,13 +71,16 @@ export function isDotcontextCodexHookCommand(command: unknown): boolean {
   return isDotcontextHookDispatchCommand(command, 'codex');
 }
 
-export function isCurrentCodexHookCommand(command: unknown): boolean {
-  return isCurrentDotcontextHookDispatchCommand(command, 'codex');
+export function isCurrentCodexHookCommand(
+  command: unknown,
+  options?: ResolveHookDispatchCommandOptions
+): boolean {
+  return isCurrentDotcontextHookDispatchCommand(command, 'codex', options);
 }
 
 export interface BuildCodexTomlHookBlocksOptions {
   includeFeatures?: boolean;
-  command?: ResolveHookDispatchCommandOptions;
+  resolveOptions?: ResolveHookDispatchCommandOptions;
 }
 
 export function buildCodexTomlHookBlocks(
@@ -90,7 +93,7 @@ export function buildCodexTomlHookBlocks(
   }
 
   const templates = buildCodexHookTemplates(
-    buildHookDispatchCommand('codex', options.command)
+    buildHookDispatchCommand('codex', options.resolveOptions)
   );
 
   for (const [eventName, entries] of Object.entries(templates)) {

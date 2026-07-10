@@ -34,12 +34,25 @@ describe('hookDispatchCommands', () => {
 
   describe('isDotcontextBinaryOnPath', () => {
     it('detects a dotcontext executable on PATH', async () => {
-      await fs.outputFile(path.join(tempDir, 'dotcontext'), '#!/bin/sh\n');
+      const binaryPath = path.join(tempDir, 'dotcontext');
+      await fs.outputFile(binaryPath, '#!/bin/sh\n');
+      await fs.chmod(binaryPath, 0o755);
 
       expect(isDotcontextBinaryOnPath({
         env: { PATH: tempDir },
         platform: 'linux',
       })).toBe(true);
+    });
+
+    it('ignores a non-executable file named dotcontext on POSIX', async () => {
+      const binaryPath = path.join(tempDir, 'dotcontext');
+      await fs.outputFile(binaryPath, 'not a binary\n');
+      await fs.chmod(binaryPath, 0o644);
+
+      expect(isDotcontextBinaryOnPath({
+        env: { PATH: tempDir },
+        platform: 'linux',
+      })).toBe(false);
     });
 
     it('detects Windows launcher variants', async () => {
@@ -70,7 +83,9 @@ describe('hookDispatchCommands', () => {
 
   describe('resolveHookDispatchCli / buildHookDispatchCommand', () => {
     it('prefers the local binary when it is on PATH', async () => {
-      await fs.outputFile(path.join(tempDir, 'dotcontext'), '#!/bin/sh\n');
+      const binaryPath = path.join(tempDir, 'dotcontext');
+      await fs.outputFile(binaryPath, '#!/bin/sh\n');
+      await fs.chmod(binaryPath, 0o755);
       const options = { env: { PATH: tempDir }, platform: 'linux' as const };
 
       expect(resolveHookDispatchCli(options)).toBe(HOOK_DISPATCH_LOCAL_CLI);
@@ -90,10 +105,35 @@ describe('hookDispatchCommands', () => {
   });
 
   describe('isCurrentDotcontextHookDispatchCommand', () => {
-    it('accepts both canonical command forms', () => {
+    it('accepts both canonical command forms when the binary is on PATH', async () => {
+      const binaryPath = path.join(tempDir, 'dotcontext');
+      await fs.outputFile(binaryPath, '#!/bin/sh\n');
+      await fs.chmod(binaryPath, 0o755);
+      const options = { env: { PATH: tempDir }, platform: 'linux' as const };
+
       for (const command of getCanonicalHookDispatchCommands('claude-code')) {
-        expect(isCurrentDotcontextHookDispatchCommand(command, 'claude-code')).toBe(true);
+        expect(isCurrentDotcontextHookDispatchCommand(command, 'claude-code', options)).toBe(true);
       }
+    });
+
+    it('treats the pinned form as current even without the binary on PATH', () => {
+      const options = { env: { PATH: tempDir }, platform: 'linux' as const };
+
+      expect(isCurrentDotcontextHookDispatchCommand(
+        `${HOOK_DISPATCH_PINNED_CLI} --source claude-code`,
+        'claude-code',
+        options
+      )).toBe(true);
+    });
+
+    it('treats the local-binary form as stale when the binary left PATH', () => {
+      const options = { env: { PATH: tempDir }, platform: 'linux' as const };
+
+      expect(isCurrentDotcontextHookDispatchCommand(
+        `${HOOK_DISPATCH_LOCAL_CLI} --source claude-code`,
+        'claude-code',
+        options
+      )).toBe(false);
     });
 
     it('rejects the legacy @latest command so installs upgrade it', () => {

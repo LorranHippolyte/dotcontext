@@ -64,6 +64,9 @@ export function isDotcontextClaudeCodeHookCommand(command: unknown): boolean {
   return isDotcontextHookDispatchCommand(command, 'claude-code');
 }
 
-export function isCurrentClaudeCodeHookCommand(command: unknown): boolean {
-  return isCurrentDotcontextHookDispatchCommand(command, 'claude-code');
+export function isCurrentClaudeCodeHookCommand(
+  command: unknown,
+  options?: ResolveHookDispatchCommandOptions
+): boolean {
+  return isCurrentDotcontextHookDispatchCommand(command, 'claude-code', options);
 }

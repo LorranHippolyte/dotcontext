@@ -48,6 +48,26 @@ function candidateBinaryNames(platform: NodeJS.Platform): string[] {
   return [HOOK_DISPATCH_BINARY_NAME];
 }
 
+function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!fs.statSync(filePath).isFile()) {
+      return false;
+    }
+
+    if (platform !== 'win32') {
+      // A regular file named dotcontext is not enough: hooks invoke it
+      // directly, so it must carry execute permission for this process.
+      fs.accessSync(filePath, fs.constants.X_OK);
+    }
+
+    return true;
+  } catch {
+    // Missing, unreadable, or non-executable entries are expected while
+    // scanning PATH.
+    return false;
+  }
+}
+
 /**
  * Detects a globally installed `dotcontext` executable by scanning PATH.
  * Detection is filesystem-only so install stays fast and side-effect free.
@@ -63,12 +83,8 @@ export function isDotcontextBinaryOnPath(
 
   for (const directory of directories) {
     for (const name of names) {
-      try {
-        if (fs.statSync(path.join(directory, name)).isFile()) {
-          return true;
-        }
-      } catch {
-        // Missing or unreadable entries are expected while scanning PATH.
+      if (isExecutableFile(path.join(directory, name), platform)) {
+        return true;
       }
     }
   }
@@ -96,9 +112,9 @@ export function buildHookDispatchCommand(
 }
 
 /**
- * Both command forms considered current for this CLI version. Configs using
- * either form are treated as up to date so installs do not churn between the
- * local-binary and pinned-npx variants when the environment changes.
+ * Both command forms recognized for this CLI version. The pinned-npx form is
+ * always current; the local-binary form is only current while a `dotcontext`
+ * executable is on PATH (see isCurrentDotcontextHookDispatchCommand).
  */
 export function getCanonicalHookDispatchCommands(
   source: HookDispatchCommandSource
@@ -123,11 +139,20 @@ export function isDotcontextHookDispatchCommand(
 
 export function isCurrentDotcontextHookDispatchCommand(
   command: unknown,
-  source: HookDispatchCommandSource
+  source: HookDispatchCommandSource,
+  options: ResolveHookDispatchCommandOptions = {}
 ): boolean {
   if (typeof command !== 'string') {
     return false;
   }
 
-  return getCanonicalHookDispatchCommands(source).includes(command);
+  if (command === `${HOOK_DISPATCH_PINNED_CLI} --source ${source}`) {
+    return true;
+  }
+
+  // The local-binary form is only current while the binary is actually on
+  // PATH; otherwise re-running the installer must repair the config instead
+  // of skipping it as up to date.
+  return command === `${HOOK_DISPATCH_LOCAL_CLI} --source ${source}`
+    && isDotcontextBinaryOnPath(options);
 }
